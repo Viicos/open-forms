@@ -1,10 +1,17 @@
+from typing import NewType
+
+from django.conf import settings
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 
+from requests import Session
 from simple_certmanager.models import Certificate
-from zeep.client import Client
+from zeep.client import Client, Transport
 
 from .constants import EndpointSecurity, SOAPVersion
+
+CertificatePath = NewType("CertificatePath", str)
+PrivateKeyPath = NewType("PrivateKeyPath", str)
 
 
 class SoapService(models.Model):
@@ -74,10 +81,38 @@ class SoapService(models.Model):
     def __str__(self):
         return self.label
 
+    @property
+    def cert(
+        self,
+    ) -> None | CertificatePath | tuple[CertificatePath, PrivateKeyPath]:
+        match self.client_certificate:
+            case Certificate(public_certificate=cert, private_key=key) if cert and key:
+                return CertificatePath(cert.path), PrivateKeyPath(key.path)
+            case Certificate(public_certificate=cert) if cert:
+                return CertificatePath(cert.path)
+        return None
+
+    @property
+    def verify(self) -> CertificatePath | bool:
+        match self.server_certificate:
+            case Certificate(public_certificate=cert) if cert:
+                return CertificatePath(cert.path)
+        return True
+
     def build_client(self) -> Client:
         """
         Build an SOAP API client from the service configuration.
         """
-        client = Client(self.url)
-        # auth can be added to zeep.Client in the future if needed
+        session = Session()
+        session.cert = self.cert
+        session.verify = self.verify
+
+        client = Client(
+            self.url,
+            transport=Transport(
+                timeout=settings.DEFAULT_TIMEOUT_REQUESTS,
+                session=session,
+            ),
+        )
+
         return client

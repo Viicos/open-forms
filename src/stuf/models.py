@@ -5,7 +5,6 @@ from soap.constants import EndpointSecurity, EndpointSecurityTypeHint
 
 
 class StufService(models.Model):
-
     soap_service = models.OneToOneField(
         "soap.SoapService",
         on_delete=models.CASCADE,
@@ -88,21 +87,10 @@ class StufService(models.Model):
         verbose_name_plural = _("StUF services")
 
     def get_cert(self) -> None | str | tuple[str, str]:
-        certificate = self.soap_service.client_certificate
-        if not certificate:
-            return None
-
-        if certificate.public_certificate and certificate.private_key:
-            return (certificate.public_certificate.path, certificate.private_key.path)
-
-        if certificate.public_certificate:
-            return certificate.public_certificate.path
+        return self.soap_service.cert
 
     def get_verify(self) -> bool | str:
-        certificate = self.soap_service.server_certificate
-        if certificate:
-            return certificate.public_certificate.path
-        return True
+        return self.soap_service.verify
 
     def get_endpoint(self, type: EndpointSecurityTypeHint) -> str:
         attr = f"endpoint_{type}"
