@@ -1,7 +1,13 @@
+# This TestCase contains a few tests that test implementation details
+# to properly test the behaviour either integration with a mock
+# mitmproxy, or some patch of the socket has to be done
+#
+# tests are tagged as such.
+
 import signal
 from pathlib import Path
 
-from django.test import SimpleTestCase, override_settings
+from django.test import SimpleTestCase, override_settings, tag
 
 from requests.exceptions import RequestException
 
@@ -55,7 +61,9 @@ class SoapServiceTests(OFVCRMixin, SimpleTestCase):
             # that opens the socket, but doesn't respond.
             self.fail("The service unexpectedly responded!")
 
-    def test_the_client_handles_tls(self):
+    @tag("implementation_detail_requests")
+    def test_client_has_server_cert_tls_configured(self):
+        # Should just use the certificate (chain) of the pair
         certificate_pair = CertificateFactory.build(with_private_key=True)
         service: SoapService = SoapServiceFactory.build(
             url=f"file://{DATA_DIR / 'empty.wsdl'}", server_certificate=certificate_pair
@@ -64,3 +72,32 @@ class SoapServiceTests(OFVCRMixin, SimpleTestCase):
         self.assertEqual(
             client.transport.session.verify, certificate_pair.public_certificate.path
         )
+
+    @tag("implementation_detail_requests")
+    def test_full_mtls(self):
+        service: SoapService = SoapServiceFactory.build(
+            url=f"file://{DATA_DIR / 'empty.wsdl'}",
+            with_server_cert=True,
+            with_client_cert=True,
+            client_certificate__with_private_key=True,
+        )
+        client = service.build_client()
+
+        self.assertEqual(len(client.transport.session.cert), 2)
+        # sanity check server cert
+        self.assertTrue(client.transport.session.verify)
+        self.assertNotEqual(client.transport.session.verify, True)
+
+    @tag("implementation_detail_requests")
+    def test_no_tls(self):
+        service: SoapService = SoapServiceFactory.build(
+            url=f"file://{DATA_DIR / 'empty.wsdl'}",
+            with_server_cert=False,
+            with_client_cert=False,
+        )
+        client = service.build_client()
+
+        # still check tls against default chain
+        self.assertEqual(client.transport.session.verify, True)
+        # no client certs
+        self.assertEqual(client.transport.session.cert, None)

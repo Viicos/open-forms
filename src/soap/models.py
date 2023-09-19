@@ -6,12 +6,38 @@ from django.utils.translation import gettext_lazy as _
 
 from requests import Session
 from simple_certmanager.models import Certificate
+from typing_extensions import Never
 from zeep.client import Client, Transport
+from zeep.wsse.signature import Signature
+from zeep.wsse.username import UsernameToken
 
 from .constants import EndpointSecurity, SOAPVersion
 
 CertificatePath = NewType("CertificatePath", str)
 PrivateKeyPath = NewType("PrivateKeyPath", str)
+Password = NewType("Password", str)
+
+
+class UnknownChoiceError(ValueError):
+    def __init__(self, instance: models.Model, field_name: str):
+        self.model = type(instance)
+        self.field: models.Field = getattr(self.model, field_name)
+        self.value = getattr(instance, field_name)
+        # This won't contain the
+        valid_values = self.field.choices
+        super().__init__(
+            _(
+                "Unexpected value %(value) for %(field). Expected one from %(valid_values)r"
+            ).format(
+                value=self.value,
+                field=self.field.verbose_name,
+                valid_values=valid_values,
+            )
+        )
+
+
+def _never(arg: Never) -> None:
+    pass
 
 
 class SoapService(models.Model):
@@ -99,6 +125,33 @@ class SoapService(models.Model):
                 return CertificatePath(cert.path)
         return True
 
+    def _wsse(
+        self,
+    ) -> Signature | UsernameToken | tuple[UsernameToken, Signature] | None:
+        sig = lambda: Signature(
+            self.client_certificate.private_key,
+            self.client_certificate.public_certificate,
+        )
+
+        basic = lambda: UsernameToken(self.user, self.password)
+
+        match self.endpoint_security:
+            case EndpointSecurity.wss:
+                return sig()
+            case EndpointSecurity.wss_basicauth:
+                return (basic(), sig())
+            case EndpointSecurity.basicauth:
+                return basic()
+            case "":
+                return None
+            case _:
+                raise UnknownChoiceError(
+                    instance=self,
+                    field_name="endpoint_security",
+                )
+
+        _never(self.endpoint_security)
+
     def build_client(self) -> Client:
         """
         Build an SOAP API client from the service configuration.
@@ -113,6 +166,7 @@ class SoapService(models.Model):
                 timeout=settings.DEFAULT_TIMEOUT_REQUESTS,
                 session=session,
             ),
+            wsse=self._wsse(),
         )
 
         return client
