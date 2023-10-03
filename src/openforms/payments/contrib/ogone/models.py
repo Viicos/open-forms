@@ -1,6 +1,8 @@
-from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils.translation import gettext_lazy as _
+
+from openforms.config.constants import CSPDirective
+from openforms.config.models import CSPSetting
 
 from .constants import HashAlgorithm, OgoneEndpoints
 
@@ -50,14 +52,31 @@ class OgoneMerchant(models.Model):
     def endpoint(self):
         return self.endpoint_custom or self.endpoint_preset
 
-    def clean(self):
-        super().clean()
-        if not self.endpoint_custom and not self.endpoint_preset:
-            raise ValidationError(
-                _("Specify either '{preset}' or '{custom}'").format(
-                    preset=_("Preset endpoint"), custom=_("Custom endpoint")
-                )
-            )
-
     def __str__(self):
         return self.label
+
+    def update_csp(self, new_endpoint: str) -> None:
+        csps = {
+            "directive": CSPDirective.FORM_ACTION,
+            "value": f"'self' {new_endpoint}",
+        }
+        CSPSetting.objects.create(**csps)
+
+    def save(self, *args, **kwargs):
+        if not self.pk:
+            self.update_csp(self.endpoint)
+        else:
+            original_object = self.__class__.objects.get(pk=self.pk)
+
+            if original_object.endpoint != self.endpoint:
+                CSPSetting.objects.filter(
+                    directive=CSPDirective.FORM_ACTION,
+                    value__in=[
+                        original_object.endpoint,
+                        f"'self' {original_object.endpoint}",
+                    ],
+                ).delete()
+
+                self.update_csp(self.endpoint)
+
+        super().save(*args, **kwargs)
